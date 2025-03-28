@@ -1,56 +1,70 @@
+import streamlit as st
+import pandas as pd
 import json
-import csv
-import os
+from io import StringIO, BytesIO
 
-# Define input and output folders
-input_folder = "input"
-output_folder = "output"
-output_filename = "output.csv"
-output_filepath = os.path.join(output_folder, output_filename)
 
-# Ensure output folder exists
-os.makedirs(output_folder, exist_ok=True)
+# Function to extract the required fields from the JSON
+def extract_json_fields(json_data):
+    result = []
+    # Access the first level of "definitions"
+    if "definitions" in json_data:
+        definitions = json_data["definitions"]
+        for key, value in definitions.items():
+            # Check if "elements" is present
+            if "elements" in value:
+                for element_key, element_value in value["elements"].items():
+                    # Extract the required details
+                    label = element_value.get("@EndUserText.label", "N/A")
+                    result.append([key, element_key, label])
+    return result
 
-# List all JSON files in the input folder
-json_files = [f for f in os.listdir(input_folder) if f.endswith(".json")]
 
-# Prepare data for CSV
-csv_data = []
+# Streamlit UI
+st.title("JSON Field Extractor")
 
-# Process each JSON file
-for json_file in json_files:
-    input_filepath = os.path.join(input_folder, json_file)
+# Upload JSON file
+uploaded_file = st.file_uploader("Choose a JSON file", type="json")
 
+if uploaded_file is not None:
+    # Load the uploaded file as JSON
     try:
-        # Load JSON file
-        with open(input_filepath, "r", encoding="utf-8") as file:
-            data = json.load(file)
+        json_data = json.load(uploaded_file)
+        # Extract fields
+        extracted_data = extract_json_fields(json_data)
 
-        # Extract data
-        definitions = data.get("definitions", {})
+        # Create DataFrame from extracted data
+        df = pd.DataFrame(extracted_data, columns=["Entity", "Field", "Label"])
 
-        for main_key, main_value in definitions.items():
-            elements = main_value.get("elements", {})
+        # Filter out rows where "Field" starts with an underscore
+        df = df[~df["Field"].str.startswith("_")]
 
-            for element_key, element_value in elements.items():
-                # Skip keys starting with "_"
-                if element_key.startswith("_"):
-                    continue
+        # Show the extracted data
+        st.write(df)
 
-                label = element_value.get("@EndUserText.label", "Unknown")
-                csv_data.append([main_key, element_key, label])
+        # Ask the user for download options
+        st.subheader("Choose Download Format")
+        download_format = st.radio("Select download format", ["CSV", "Excel", "JSON"])
+
+        # Convert to the chosen format
+        if download_format == "CSV":
+            # Convert DataFrame to CSV
+            csv_data = df.to_csv(index=False)
+            st.download_button("Download CSV", csv_data, file_name="extracted_fields.csv", mime="text/csv")
+
+        elif download_format == "Excel":
+            # Convert DataFrame to Excel
+            excel_data = BytesIO()
+            with pd.ExcelWriter(excel_data, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name="Extracted Data")
+            excel_data.seek(0)
+            st.download_button("Download Excel", excel_data, file_name="extracted_fields.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+        elif download_format == "JSON":
+            # Convert DataFrame to JSON
+            json_data = df.to_json(orient="records")
+            st.download_button("Download JSON", json_data, file_name="extracted_fields.json", mime="application/json")
 
     except Exception as e:
-        print(f"Error processing {json_file}: {e}")
-
-# Write to CSV
-with open(output_filepath, "w", newline="", encoding="utf-8") as csvfile:
-    csv_writer = csv.writer(csvfile)
-
-    # Writing header
-    csv_writer.writerow(["Main Key", "Element Key", "Label"])
-
-    # Writing data rows
-    csv_writer.writerows(csv_data)
-
-print(f"CSV file '{output_filepath}' has been created successfully with data from {len(json_files)} files!")
+        st.error(f"Error reading JSON file: {e}")
